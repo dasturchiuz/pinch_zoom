@@ -46,31 +46,68 @@ class _PinchZoomState extends State<PinchZoom>
   late Animation<Matrix4> _animationReset;
   late AnimationController _controllerReset;
 
+  var viewerKey = GlobalKey();
+  Rect placeholder;
+  OverlayEntry entry;
+  var controller = TransformationController();
+  Matrix4Tween snapTween;
+  AnimationController snap;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: double.maxFinite,
-      width: double.maxFinite,
-      child: InteractiveViewer(
-        child: widget.child,
-        scaleEnabled: widget.zoomEnabled,
-        maxScale: widget.maxScale,
-        panEnabled: false,
-        onInteractionStart: widget.zoomEnabled
-            ? (_) {
-                if (_controllerReset.status == AnimationStatus.forward) {
-                  _animateResetStop();
-                } else {
-                  if (widget.onZoomStart != null) {
-                    widget.onZoomStart!();
-                  }
-                }
-              }
-            : null,
-        onInteractionEnd: (_) => _animateResetInitialize(),
-        transformationController: _transformationController,
-      ),
+    var viewer = placeholder != null
+        ? SizedBox.fromSize(size: placeholder.size)
+        : buildViewer(context);
+
+    return Card(
+      child: viewer,
+      clipBehavior: Clip.antiAlias,
     );
+  }
+
+  Widget buildViewer(BuildContext context) {
+    return InteractiveViewer(
+        key: viewerKey,
+        transformationController: controller,
+        panEnabled: false,
+        child: Image.network(
+            "https://upload.wikimedia.org/wikipedia/commons/6/6a/Mona_Lisa.jpg"),
+        onInteractionStart: (details) {
+          if (placeholder != null) return;
+
+          setState(() {
+            var renderObject =
+                viewerKey.currentContext.findRenderObject() as RenderBox;
+            placeholder = Rect.fromPoints(
+              renderObject.localToGlobal(Offset.zero),
+              renderObject
+                  .localToGlobal(renderObject.size.bottomRight(Offset.zero)),
+            );
+          });
+
+          entry = OverlayEntry(
+            builder: (context) {
+              return Positioned.fromRect(
+                rect: placeholder,
+                child: buildViewer(context),
+              );
+            },
+          );
+
+          Overlay.of(context).insert(entry);
+        },
+        onInteractionEnd: (details) {
+          snapTween = Matrix4Tween(
+            begin: controller.value,
+            end: Matrix4.identity(),
+          );
+          snap.value = 0;
+          snap.animateTo(
+            1,
+            duration: Duration(milliseconds: 250),
+            curve: Curves.ease,
+          );
+        });
   }
 
   @override
@@ -80,10 +117,24 @@ class _PinchZoomState extends State<PinchZoom>
       duration: widget.resetDuration,
       vsync: this,
     );
+    snap = AnimationController(vsync: this);
+    snap.addListener(() {
+      if (snapTween == null) return;
+      controller.value = snapTween.evaluate(snap);
+      if (snap.isCompleted) {
+        entry.remove();
+        entry = null;
+        setState(() {
+          placeholder = null;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    snap.dispose();
+
     _controllerReset.dispose();
     super.dispose();
   }
